@@ -245,9 +245,9 @@
     }
       
     $.fn.extend({
-      loadPage: function(widget, page) {
+      loadPage: function(page) {
         s.page = page;
-        load(widget);
+        load(this);
       }
     });
     
