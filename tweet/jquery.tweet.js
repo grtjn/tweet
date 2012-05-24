@@ -26,21 +26,30 @@
       auto_join_text_reply: "I replied to",     // [string]   auto tense for replies: "I replied to" @someone "with"
       auto_join_text_url: "I was looking at",   // [string]   auto tense for urls: "I was looking at" http:...
       loading_text: null,                       // [string]   optional loading text, displayed while tweets load
-      refresh_interval: null ,                  // [integer]  optional number of seconds after which to reload tweets
+      refresh_interval: null,                   // [integer]  optional number of seconds after which to reload tweets
       twitter_url: "twitter.com",               // [string]   custom twitter url, if any (apigee, etc.)
       twitter_api_url: "api.twitter.com",       // [string]   custom twitter api url, if any (apigee, etc.)
       twitter_search_url: "search.twitter.com", // [string]   custom twitter search url, if any (apigee, etc.)
       template: "{avatar}{time}{join}{text}",   // [string or function] template used to construct each tweet <li> - see code for available vars
-      comparator: function(tweet1, tweet2) {    // [function] comparator used to sort tweets (see Array.sort)
-        return tweet2["tweet_time"] - tweet1["tweet_time"];
-      },
-      filter: function(tweet) {                 // [function] whether or not to include a particular tweet (be sure to also set 'fetch')
-        return true;
-      }
+      comparator: null,                         // [function] comparator used to sort tweets (see Array.sort)
+      filter: null                              // [function] whether or not to include a particular tweet (be sure to also set 'fetch')
       // You can attach callbacks to the following events using jQuery's standard .bind() mechanism:
-      //   "loaded" -- triggered when tweets have been fetched and rendered
+      //   "tweet:refresh" -- [internal] automatically triggered if refresh_interval not null
+      //   "loaded"        -- triggered when tweets have been fetched and rendered
+      //   "empty"         -- triggered when there are no tweets to render (triggered after loaded)
+      //   "full"          -- triggered when there are tweets to render (triggered after loaded)
     }, o);
 
+    // example comparator
+    function default_comparator(tweet1, tweet2) {
+      return tweet2["tweet_time"] - tweet1["tweet_time"];
+    }
+    
+    // example filter
+    function default_filter(tweet) {
+      return true;
+    }
+    
     // See http://daringfireball.net/2010/07/improved_regex_for_matching_urls
     var url_regexp = /\b((?:https?:\/\/|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}\/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?«»“”‘’]))/i;
 
@@ -79,7 +88,7 @@
                          ' <a href="http://'+s.twitter_search_url+'/search?q=&tag=$1&lang=all'+((s.username && s.username.length == 1 && !s.list) ? '&from='+s.username.join("%2BOR%2B") : '')+'" class="tweet_hashtag">#$1</a>'),
       makeHeart: replacer(/(&lt;)+[3]/gi, "<tt class='heart'>&#x2665;</tt>")
     });
-
+    
     function linkURLs(text, entities) {
       return text.replace(url_regexp, function(match) {
         var url = (/^[a-z]+:/i).test(match) ? match : "http://"+match;
@@ -210,37 +219,55 @@
       return o;
     }
 
+    function load(widget) {
+      $.getJSON(build_api_url(), function(data){
+        var list = $('<ul class="tweet_list">');
+
+        var tweets = $.map(data.results || data, extract_template_data);
+        if (s.filter != null) {
+          tweets = $.grep(tweets, s.filter);
+        }
+        if (s.comparator != null) {
+          tweets = tweets.sort(s.comparator);
+        }
+        tweets = tweets.slice(0, s.count);
+        list.append($.map(tweets, function(o) { return "<li>" + t(s.template, o) + "</li>"; }).join('')).
+          children('li:first').addClass('tweet_first').end().
+          children('li:odd').addClass('tweet_even').end().
+          children('li:even').addClass('tweet_odd');
+
+        $(widget).empty().append(list);
+        if (s.intro_text) list.before(intro);
+        if (s.outro_text) list.after(outro);
+          
+        $(widget).trigger("loaded").trigger((tweets.length === 0 ? "empty" : "full"));
+      });
+    }
+      
+    $.fn.extend({
+      loadPage: function(widget, page) {
+        s.page = page;
+        load(widget);
+      }
+    });
+    
     return this.each(function(i, widget){
-      var list = $('<ul class="tweet_list">');
       var intro = '<p class="tweet_intro">'+s.intro_text+'</p>';
       var outro = '<p class="tweet_outro">'+s.outro_text+'</p>';
       var loading = $('<p class="loading">'+s.loading_text+'</p>');
 
-      if(s.username && typeof(s.username) == "string"){
+      if (s.username && typeof(s.username) == "string") {
         s.username = [s.username];
       }
 
-      $(widget).unbind("tweet:load").bind("tweet:load", function(){
-        if (s.loading_text) $(widget).empty().append(loading);
-        $.getJSON(build_api_url(), function(data){
-          $(widget).empty().append(list);
-          if (s.intro_text) list.before(intro);
-          list.empty();
-
-          var tweets = $.map(data.results || data, extract_template_data);
-          tweets = $.grep(tweets, s.filter).sort(s.comparator).slice(0, s.count);
-          list.append($.map(tweets, function(o) { return "<li>" + t(s.template, o) + "</li>"; }).join('')).
-              children('li:first').addClass('tweet_first').end().
-              children('li:odd').addClass('tweet_even').end().
-              children('li:even').addClass('tweet_odd');
-
-          if (s.outro_text) list.after(outro);
-          $(widget).trigger("loaded").trigger((tweets.length === 0 ? "empty" : "full"));
-          if (s.refresh_interval) {
-            window.setTimeout(function() { $(widget).trigger("tweet:load"); }, 1000 * s.refresh_interval);
-          }
-        });
-      }).trigger("tweet:load");
+      if (s.loading_text) $(widget).empty().append(loading);
+      
+      $(widget).unbind("tweet:refresh").bind("tweet:refresh", function(){
+        load(widget);
+        if (s.refresh_interval) {
+          window.setTimeout(function() { $(widget).trigger("tweet:refresh"); }, 1000 * s.refresh_interval);
+        }
+      }).trigger("tweet:refresh");
     });
   };
 }));
